@@ -665,97 +665,6 @@ osmtogeojson = function (data, options, featureCallback) {
         }
         if (!featureCallback) geojsonpolygons.push(feature);
         else featureCallback(rewind(feature));
-
-        function construct_multilinestring(rel) {
-          let is_tainted = false;
-          // prepare route members
-          let members;
-          members = rel.members.filter(function (m) {
-            return m.type === "way";
-          });
-          members = members.map(function (m) {
-            let way = wayids[m.ref];
-            if (way === undefined || way.nodes === undefined) {
-              // check for missing ways
-              if (options.verbose)
-                console.warn(
-                  "Route " + rel.type + "/" + rel.id,
-                  "tainted by a missing or incomplete  way",
-                  m.type + "/" + m.ref
-                );
-              is_tainted = true;
-              return;
-            }
-            return {
-              // TODO: this is slow! :(
-              id: m.ref,
-              role: m.role,
-              way: way,
-              nodes: way.nodes.filter(function (n) {
-                if (n !== undefined) return true;
-                is_tainted = true;
-                if (options.verbose)
-                  console.warn(
-                    "Route",
-                    rel.type + "/" + rel.id,
-                    "tainted by a way",
-                    m.type + "/" + m.ref,
-                    "with a missing node"
-                  );
-                return false;
-              }),
-            };
-          });
-          members = _.compact(members);
-          // construct connected linestrings
-          let linestrings;
-          linestrings = join(members);
-
-          // sanitize mp-coordinates (remove empty clusters or rings, {lat,lon,...} to [lon,lat]
-          let coords = [];
-          coords = _.compact(
-            linestrings.map(function (linestring) {
-              return _.compact(
-                linestring.map(function (node) {
-                  return [+node.lon, +node.lat];
-                })
-              );
-            })
-          );
-
-          if (coords.length == 0) {
-            if (options.verbose)
-              console.warn(
-                "Route",
-                rel.type + "/" + rel.id,
-                "contains no coordinates"
-              );
-            return false; // ignore routes without coordinates
-          }
-
-          // mp parsed, now construct the geoJSON
-          const feature = {
-            type: "Feature",
-            id: rel.type + "/" + rel.id,
-            properties: {
-              type: rel.type,
-              id: rel.id,
-              tags: rel.tags || {},
-              relations: relsmap[rel.type][rel.id] || [],
-              meta: build_meta_information(rel),
-            },
-            geometry: {
-              type: coords.length === 1 ? "LineString" : "MultiLineString",
-              coordinates: coords.length === 1 ? coords[0] : coords,
-            },
-          };
-          if (is_tainted) {
-            if (options.verbose)
-              console.warn("Route", rel.type + "/" + rel.id, "is tainted");
-            feature.properties["tainted"] = true;
-          }
-          return feature;
-        }
       } // end construct multilinestring for route relations
       if (
         typeof rels[i].tags != "undefined" &&
@@ -847,209 +756,6 @@ osmtogeojson = function (data, options, featureCallback) {
         }
         if (!featureCallback) geojsonpolygons.push(feature);
         else featureCallback(rewind(feature));
-
-        function construct_multipolygon(tag_object, rel) {
-          let is_tainted = false;
-          let mp_geometry = simple_mp ? "way" : "relation",
-            mp_id =
-              typeof tag_object.id === "number"
-                ? tag_object.id
-                : +tag_object.id.replace("_fullGeom", "");
-          // prepare mp members
-          let members;
-          members = rel.members.filter(function (m) {
-            return m.type === "way";
-          });
-          members = members.map(function (m) {
-            let way = wayids[m.ref];
-            if (way === undefined || way.nodes === undefined) {
-              // check for missing ways
-              if (options.verbose)
-                console.warn(
-                  "Multipolygon",
-                  mp_geometry + "/" + mp_id,
-                  "tainted by a missing or incomplete way",
-                  m.type + "/" + m.ref
-                );
-              is_tainted = true;
-              return;
-            }
-            return {
-              // TODO: this is slow! :(
-              id: m.ref,
-              role: m.role || "outer",
-              way: way,
-              nodes: way.nodes.filter(function (n) {
-                if (n !== undefined) return true;
-                is_tainted = true;
-                if (options.verbose)
-                  console.warn(
-                    "Multipolygon",
-                    mp_geometry + "/" + mp_id,
-                    "tainted by a way",
-                    m.type + "/" + m.ref,
-                    "with a missing node"
-                  );
-                return false;
-              }),
-            };
-          });
-          members = _.compact(members);
-          // construct outer and inner rings
-          let outers, inners;
-          outers = join(
-            members.filter(function (m) {
-              return m.role === "outer";
-            })
-          );
-          inners = join(
-            members.filter(function (m) {
-              return m.role === "inner";
-            })
-          );
-          // sort rings
-          let mp;
-          function findOuter(inner) {
-            let polygonIntersectsPolygon = function (outer, inner) {
-              for (let i = 0; i < inner.length; i++)
-                if (pointInPolygon(inner[i], outer)) return true;
-              return false;
-            };
-            let mapCoordinates = function (from) {
-              return from.map(function (n) {
-                return [+n.lat, +n.lon];
-              });
-            };
-            // stolen from iD/geo.js,
-            // based on https://github.com/substack/point-in-polygon,
-            // ray-casting algorithm based on http://www.ecse.rpi.edu/Homepages/wrf/Research/Short_Notes/pnpoly.html
-            let pointInPolygon = function (point, polygon) {
-              let x = point[0],
-                y = point[1],
-                inside = false;
-              for (
-                let i = 0, j = polygon.length - 1;
-                i < polygon.length;
-                j = i++
-              ) {
-                let xi = polygon[i][0],
-                  yi = polygon[i][1];
-                let xj = polygon[j][0],
-                  yj = polygon[j][1];
-                let intersect =
-                  yi > y != yj > y &&
-                  x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
-                if (intersect) inside = !inside;
-              }
-              return inside;
-            };
-            // stolen from iD/relation.js
-            let o, outer;
-            // todo: all this coordinate mapping makes this unneccesarily slow.
-            // see the "todo: this is slow! :(" above.
-            inner = mapCoordinates(inner);
-            /*for (o = 0; o < outers.length; o++) {
-              outer = mapCoordinates(outers[o]);
-              if (polygonContainsPolygon(outer, inner))
-                return o;
-            }*/
-            for (o = 0; o < outers.length; o++) {
-              outer = mapCoordinates(outers[o]);
-              if (polygonIntersectsPolygon(outer, inner)) return o;
-            }
-          }
-          mp = outers.map(function (o) {
-            return [o];
-          });
-          for (let j = 0; j < inners.length; j++) {
-            let o = findOuter(inners[j]);
-            if (o !== undefined) mp[o].push(inners[j]);
-            else if (options.verbose)
-              console.warn(
-                "Multipolygon",
-                mp_geometry + "/" + mp_id,
-                "contains an inner ring with no containing outer"
-              );
-            // so, no outer ring for this inner ring is found.
-            // We're going to ignore holes in empty space.
-          }
-          // sanitize mp-coordinates (remove empty clusters or rings, {lat,lon,...} to [lon,lat]
-          let mp_coords = [];
-          mp_coords = _.compact(
-            mp.map(function (cluster) {
-              let cl = _.compact(
-                cluster.map(function (ring) {
-                  if (ring.length < 4) {
-                    // todo: is this correct: ring.length < 4 ?
-                    if (options.verbose)
-                      console.warn(
-                        "Multipolygon",
-                        mp_geometry + "/" + mp_id,
-                        "contains a ring with less than four nodes"
-                      );
-                    return;
-                  }
-                  return _.compact(
-                    ring.map(function (node) {
-                      return [+node.lon, +node.lat];
-                    })
-                  );
-                })
-              );
-              if (cl.length == 0) {
-                if (options.verbose)
-                  console.warn(
-                    "Multipolygon",
-                    mp_geometry + "/" + mp_id,
-                    "contains an empty ring cluster"
-                  );
-                return;
-              }
-              return cl;
-            })
-          );
-
-          if (mp_coords.length == 0) {
-            if (options.verbose)
-              console.warn(
-                "Multipolygon",
-                mp_geometry + "/" + mp_id,
-                "contains no coordinates"
-              );
-            return false; // ignore multipolygons without coordinates
-          }
-          let mp_type = "MultiPolygon";
-          if (mp_coords.length === 1) {
-            mp_type = "Polygon";
-            mp_coords = mp_coords[0];
-          }
-          // mp parsed, now construct the geoJSON
-          let feature = {
-            type: "Feature",
-            id: tag_object.type + "/" + mp_id,
-            properties: {
-              type: tag_object.type,
-              id: mp_id,
-              tags: tag_object.tags || {},
-              relations: relsmap[tag_object.type][tag_object.id] || [],
-              meta: build_meta_information(tag_object),
-            },
-            geometry: {
-              type: mp_type,
-              coordinates: mp_coords,
-            },
-          };
-          if (is_tainted) {
-            if (options.verbose)
-              console.warn(
-                "Multipolygon",
-                mp_geometry + "/" + mp_id,
-                "is tainted"
-              );
-            feature.properties["tainted"] = true;
-          }
-          return feature;
-        }
       }
     }
     // process lines and polygons
@@ -1241,6 +947,287 @@ function join(ways) {
     }
   }
   return joined;
+}
+
+function construct_multilinestring(rel) {
+  let is_tainted = false;
+  // prepare route members
+  let members;
+  members = rel.members.filter(function (m) {
+    return m.type === "way";
+  });
+  members = members.map(function (m) {
+    let way = wayids[m.ref];
+    if (way === undefined || way.nodes === undefined) {
+      // check for missing ways
+      if (options.verbose)
+        console.warn(
+          "Route " + rel.type + "/" + rel.id,
+          "tainted by a missing or incomplete  way",
+          m.type + "/" + m.ref
+        );
+      is_tainted = true;
+      return;
+    }
+    return {
+      // TODO: this is slow! :(
+      id: m.ref,
+      role: m.role,
+      way: way,
+      nodes: way.nodes.filter(function (n) {
+        if (n !== undefined) return true;
+        is_tainted = true;
+        if (options.verbose)
+          console.warn(
+            "Route",
+            rel.type + "/" + rel.id,
+            "tainted by a way",
+            m.type + "/" + m.ref,
+            "with a missing node"
+          );
+        return false;
+      }),
+    };
+  });
+  members = _.compact(members);
+  // construct connected linestrings
+  let linestrings;
+  linestrings = join(members);
+
+  // sanitize mp-coordinates (remove empty clusters or rings, {lat,lon,...} to [lon,lat]
+  let coords = [];
+  coords = _.compact(
+    linestrings.map(function (linestring) {
+      return _.compact(
+        linestring.map(function (node) {
+          return [+node.lon, +node.lat];
+        })
+      );
+    })
+  );
+
+  if (coords.length == 0) {
+    if (options.verbose)
+      console.warn("Route", rel.type + "/" + rel.id, "contains no coordinates");
+    return false; // ignore routes without coordinates
+  }
+
+  // mp parsed, now construct the geoJSON
+  const feature = {
+    type: "Feature",
+    id: rel.type + "/" + rel.id,
+    properties: {
+      type: rel.type,
+      id: rel.id,
+      tags: rel.tags || {},
+      relations: relsmap[rel.type][rel.id] || [],
+      meta: build_meta_information(rel),
+    },
+    geometry: {
+      type: coords.length === 1 ? "LineString" : "MultiLineString",
+      coordinates: coords.length === 1 ? coords[0] : coords,
+    },
+  };
+  if (is_tainted) {
+    if (options.verbose)
+      console.warn("Route", rel.type + "/" + rel.id, "is tainted");
+    feature.properties["tainted"] = true;
+  }
+  return feature;
+}
+
+function construct_multipolygon(tag_object, rel) {
+  let is_tainted = false;
+  let mp_geometry = simple_mp ? "way" : "relation",
+    mp_id =
+      typeof tag_object.id === "number"
+        ? tag_object.id
+        : +tag_object.id.replace("_fullGeom", "");
+  // prepare mp members
+  let members;
+  members = rel.members.filter(function (m) {
+    return m.type === "way";
+  });
+  members = members.map(function (m) {
+    let way = wayids[m.ref];
+    if (way === undefined || way.nodes === undefined) {
+      // check for missing ways
+      if (options.verbose)
+        console.warn(
+          "Multipolygon",
+          mp_geometry + "/" + mp_id,
+          "tainted by a missing or incomplete way",
+          m.type + "/" + m.ref
+        );
+      is_tainted = true;
+      return;
+    }
+    return {
+      // TODO: this is slow! :(
+      id: m.ref,
+      role: m.role || "outer",
+      way: way,
+      nodes: way.nodes.filter(function (n) {
+        if (n !== undefined) return true;
+        is_tainted = true;
+        if (options.verbose)
+          console.warn(
+            "Multipolygon",
+            mp_geometry + "/" + mp_id,
+            "tainted by a way",
+            m.type + "/" + m.ref,
+            "with a missing node"
+          );
+        return false;
+      }),
+    };
+  });
+  members = _.compact(members);
+  // construct outer and inner rings
+  let outers, inners;
+  outers = join(
+    members.filter(function (m) {
+      return m.role === "outer";
+    })
+  );
+  inners = join(
+    members.filter(function (m) {
+      return m.role === "inner";
+    })
+  );
+  // sort rings
+  let mp;
+  function findOuter(inner) {
+    let polygonIntersectsPolygon = function (outer, inner) {
+      for (let i = 0; i < inner.length; i++)
+        if (pointInPolygon(inner[i], outer)) return true;
+      return false;
+    };
+    let mapCoordinates = function (from) {
+      return from.map(function (n) {
+        return [+n.lat, +n.lon];
+      });
+    };
+    // stolen from iD/geo.js,
+    // based on https://github.com/substack/point-in-polygon,
+    // ray-casting algorithm based on http://www.ecse.rpi.edu/Homepages/wrf/Research/Short_Notes/pnpoly.html
+    let pointInPolygon = function (point, polygon) {
+      let x = point[0],
+        y = point[1],
+        inside = false;
+      for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+        let xi = polygon[i][0],
+          yi = polygon[i][1];
+        let xj = polygon[j][0],
+          yj = polygon[j][1];
+        let intersect =
+          yi > y != yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+        if (intersect) inside = !inside;
+      }
+      return inside;
+    };
+    // stolen from iD/relation.js
+    let o, outer;
+    // todo: all this coordinate mapping makes this unneccesarily slow.
+    // see the "todo: this is slow! :(" above.
+    inner = mapCoordinates(inner);
+    /*for (o = 0; o < outers.length; o++) {
+              outer = mapCoordinates(outers[o]);
+              if (polygonContainsPolygon(outer, inner))
+                return o;
+            }*/
+    for (o = 0; o < outers.length; o++) {
+      outer = mapCoordinates(outers[o]);
+      if (polygonIntersectsPolygon(outer, inner)) return o;
+    }
+  }
+  mp = outers.map(function (o) {
+    return [o];
+  });
+  for (let j = 0; j < inners.length; j++) {
+    let o = findOuter(inners[j]);
+    if (o !== undefined) mp[o].push(inners[j]);
+    else if (options.verbose)
+      console.warn(
+        "Multipolygon",
+        mp_geometry + "/" + mp_id,
+        "contains an inner ring with no containing outer"
+      );
+    // so, no outer ring for this inner ring is found.
+    // We're going to ignore holes in empty space.
+  }
+  // sanitize mp-coordinates (remove empty clusters or rings, {lat,lon,...} to [lon,lat]
+  let mp_coords = [];
+  mp_coords = _.compact(
+    mp.map(function (cluster) {
+      let cl = _.compact(
+        cluster.map(function (ring) {
+          if (ring.length < 4) {
+            // todo: is this correct: ring.length < 4 ?
+            if (options.verbose)
+              console.warn(
+                "Multipolygon",
+                mp_geometry + "/" + mp_id,
+                "contains a ring with less than four nodes"
+              );
+            return;
+          }
+          return _.compact(
+            ring.map(function (node) {
+              return [+node.lon, +node.lat];
+            })
+          );
+        })
+      );
+      if (cl.length == 0) {
+        if (options.verbose)
+          console.warn(
+            "Multipolygon",
+            mp_geometry + "/" + mp_id,
+            "contains an empty ring cluster"
+          );
+        return;
+      }
+      return cl;
+    })
+  );
+
+  if (mp_coords.length == 0) {
+    if (options.verbose)
+      console.warn(
+        "Multipolygon",
+        mp_geometry + "/" + mp_id,
+        "contains no coordinates"
+      );
+    return false; // ignore multipolygons without coordinates
+  }
+  let mp_type = "MultiPolygon";
+  if (mp_coords.length === 1) {
+    mp_type = "Polygon";
+    mp_coords = mp_coords[0];
+  }
+  // mp parsed, now construct the geoJSON
+  let feature = {
+    type: "Feature",
+    id: tag_object.type + "/" + mp_id,
+    properties: {
+      type: tag_object.type,
+      id: mp_id,
+      tags: tag_object.tags || {},
+      relations: relsmap[tag_object.type][tag_object.id] || [],
+      meta: build_meta_information(tag_object),
+    },
+    geometry: {
+      type: mp_type,
+      coordinates: mp_coords,
+    },
+  };
+  if (is_tainted) {
+    if (options.verbose)
+      console.warn("Multipolygon", mp_geometry + "/" + mp_id, "is tainted");
+    feature.properties["tainted"] = true;
+  }
+  return feature;
 }
 
 // for backwards compatibility
