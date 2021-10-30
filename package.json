@@ -6,10 +6,13 @@
   "types": "index.d.ts",
   "scripts": {
     "pretest": "npm ls --depth=Infinity > /dev/null",
-    "test": "npm run test-lib && npm run test-cli",
+    "test": "uvu -r tsm test",
+    "lint": "eslint .",
     "test-lib": "mocha -R spec",
     "test-cli": "node test-cli/cli.test.js | faucet"
   },
+  "module": "index.js",
+  "type": "module",
   "bin": {
     "osmtogeojson": "osmtogeojson"
   },
@@ -27,10 +30,10 @@
     "url": "https://github.com/tyrasd/osmtogeojson/issues"
   },
   "dependencies": {
+    "@mapbox/geojson-rewind": "0.4.0",
     "JSONStream": "0.8.0",
     "concat-stream": "2.0.0",
     "geojson-numeric": "0.2.1",
-    "@mapbox/geojson-rewind": "0.4.0",
     "htmlparser2": "3.5.1",
     "optimist": "~0.3.5",
     "osm-polygon-features": "^0.9.1",
@@ -41,11 +44,17 @@
     "@types/geojson": "^7946.0"
   },
   "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^5.2.0",
+    "@typescript-eslint/parser": "^5.2.0",
+    "eslint": "^8.1.0",
     "expect.js": "~0.2.0",
+    "faucet": "~0.0.1",
     "istanbul": "^0.4.5",
     "mocha": "~1.12.0",
     "tape": "~2.10.2",
-    "faucet": "~0.0.1"
+    "tsm": "^2.1.4",
+    "typescript": "^4.4.4",
+    "uvu": "^0.5.2"
   },
   "engines": {
     "node": ">=0.5"
